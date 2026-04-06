@@ -5,15 +5,40 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 6227;
+const PORT = Number(process.env.PORT) || 6227;
+const rawCorsOrigin = process.env.CORS_ORIGIN || '';
+const allowedOrigins = rawCorsOrigin
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const corsOptions =
+  allowedOrigins.length === 0 || allowedOrigins.includes('*')
+    ? { origin: true }
+    : { origin: allowedOrigins };
 
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Store for streaming chunks
 const streamStore = new Map();
+
+const createStreamState = () => ({
+  frames: [],
+  createdAt: new Date(),
+  active: true,
+  totalFrames: 0,
+  lastFrameTime: null
+});
+
+const getOrCreateStream = (streamId) => {
+  if (!streamStore.has(streamId)) {
+    streamStore.set(streamId, createStreamState());
+  }
+
+  return streamStore.get(streamId);
+};
 
 /**
  * Route: POST /api/stream/chunk
@@ -27,16 +52,9 @@ app.post('/api/stream/chunk', (req, res) => {
       return res.status(400).json({ error: 'streamId and frameData are required' });
     }
 
-    // Initialize stream if not exists
-    if (!streamStore.has(streamId)) {
-      streamStore.set(streamId, {
-        frames: [],
-        createdAt: new Date(),
-        active: true
-      });
-    }
-
-    const stream = streamStore.get(streamId);
+    const stream = getOrCreateStream(streamId);
+    stream.totalFrames += 1;
+    const frameTimestamp = timestamp || Date.now();
     
     // Keep only last 30 frames for low latency
     if (stream.frames.length >= 30) {
@@ -45,12 +63,17 @@ app.post('/api/stream/chunk', (req, res) => {
 
     stream.frames.push({
       data: frameData,
-      timestamp: timestamp || Date.now()
+      timestamp: frameTimestamp,
+      sequence: stream.totalFrames
     });
 
-    stream.lastFrameTime = Date.now();
+    stream.lastFrameTime = frameTimestamp;
 
-    res.json({ success: true, frameCount: stream.frames.length });
+    res.json({
+      success: true,
+      frameCount: stream.frames.length,
+      totalFrames: stream.totalFrames
+    });
   } catch (error) {
     console.error('Error receiving frame:', error);
     res.status(500).json({ error: 'Failed to process frame' });
@@ -60,29 +83,22 @@ app.post('/api/stream/chunk', (req, res) => {
 /**
  * Route: GET /live/:streamId
  * MJPEG stream endpoint - serves live video as motion JPEG
- * Access in browser as: http://localhost:5000/live/default
+ * Access in browser as: http://localhost:6227/live/default
  */
 app.get('/live/:streamId', (req, res) => {
   const { streamId } = req.params;
 
   // Set response headers for MJPEG stream
-  res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=--boundary');
+  // RFC 2046: boundary parameter should not include the leading "--".
+  // Delimiter lines include it ("--" + boundary token) in the body.
+  res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=boundary');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
-  // Check if stream exists or create new one
-  if (!streamStore.has(streamId)) {
-    streamStore.set(streamId, {
-      frames: [],
-      createdAt: new Date(),
-      active: true
-    });
-  }
-
-  const stream = streamStore.get(streamId);
-  let lastFrameIndex = -1;
+  const stream = getOrCreateStream(streamId);
+  let lastFrameSequence = 0;
 
   // Send frames continuously
   const intervalId = setInterval(() => {
@@ -92,10 +108,19 @@ app.get('/live/:streamId', (req, res) => {
       const currentFrame = frames[frames.length - 1];
 
       // Only send if new frame available
-      if (lastFrameIndex !== frames.length - 1) {
+      if (currentFrame.sequence !== lastFrameSequence) {
         try {
           const boundary = '\r\n--boundary\r\n';
-          const frameBuffer = Buffer.from(currentFrame.data.split(',')[1], 'base64');
+          const framePayload =
+            typeof currentFrame.data === 'string' && currentFrame.data.includes(',')
+              ? currentFrame.data.split(',')[1]
+              : currentFrame.data;
+
+          if (!framePayload) {
+            return;
+          }
+
+          const frameBuffer = Buffer.from(framePayload, 'base64');
 
           res.write(boundary);
           res.write('Content-Type: image/jpeg\r\n');
@@ -104,7 +129,7 @@ app.get('/live/:streamId', (req, res) => {
           res.write(frameBuffer);
           res.write('\r\n');
 
-          lastFrameIndex = frames.length - 1;
+          lastFrameSequence = currentFrame.sequence;
         } catch (error) {
           console.error('Error writing frame:', error);
           clearInterval(intervalId);
@@ -138,7 +163,15 @@ app.get('/stream/:streamId', (req, res) => {
   const { streamId } = req.params;
 
   if (!streamStore.has(streamId)) {
-    return res.status(404).json({ error: 'Stream not found' });
+    return res.json({
+      streamId,
+      active: false,
+      frameCount: 0,
+      totalFrames: 0,
+      createdAt: null,
+      lastFrame: null,
+      mjpegUrl: `/live/${streamId}`
+    });
   }
 
   const stream = streamStore.get(streamId);
@@ -148,6 +181,7 @@ app.get('/stream/:streamId', (req, res) => {
     streamId,
     active: stream.active,
     frameCount: stream.frames.length,
+    totalFrames: stream.totalFrames,
     createdAt: stream.createdAt,
     lastFrame: lastFrame ? lastFrame.timestamp : null,
     mjpegUrl: `/live/${streamId}`
@@ -163,7 +197,9 @@ app.get('/streams', (req, res) => {
     streamId: id,
     active: data.active,
     frameCount: data.frames.length,
-    createdAt: data.createdAt
+    totalFrames: data.totalFrames,
+    createdAt: data.createdAt,
+    lastFrameTime: data.lastFrameTime
   }));
 
   res.json({ streams });

@@ -16,6 +16,7 @@ function CameraCapture({ backendUrl, streamId }) {
   });
   const streamIntervalRef = useRef(null);
   const statsIntervalRef = useRef(null);
+  const uploadInProgressRef = useRef(false);
 
   // Enumerate available cameras
   useEffect(() => {
@@ -59,6 +60,7 @@ function CameraCapture({ backendUrl, streamId }) {
 
   // Stop camera
   const stopCamera = () => {
+    stopStreaming();
     if (videoRef.current && videoRef.current.srcObject) {
       videoRef.current.srcObject.getTracks().forEach(track => track.stop());
       setIsCameraActive(false);
@@ -81,12 +83,34 @@ function CameraCapture({ backendUrl, streamId }) {
       const ctx = canvas.getContext('2d');
       const video = videoRef.current;
 
+      if (!video || !canvas || !ctx) {
+        throw new Error('Camera elements are not ready yet');
+      }
+
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        await new Promise((resolve) => {
+          const onReady = () => resolve();
+          video.addEventListener('loadeddata', onReady, { once: true });
+          setTimeout(resolve, 1500);
+        });
+      }
+
       let frameCount = 0;
       let lastTime = Date.now();
 
       // Send frames every 33ms (~30 FPS)
       streamIntervalRef.current = setInterval(async () => {
+        if (uploadInProgressRef.current) {
+          return;
+        }
+
         try {
+          if (!video.videoWidth || !video.videoHeight || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            return;
+          }
+
+          uploadInProgressRef.current = true;
+
           // Draw video frame to canvas
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
@@ -107,13 +131,16 @@ function CameraCapture({ backendUrl, streamId }) {
           });
 
           if (!response.ok) {
-            throw new Error('Failed to send frame');
+            throw new Error(`Failed to send frame (${response.status})`);
           }
 
           frameCount++;
         } catch (err) {
           console.error('Stream error:', err);
+          setError('Streaming stopped: ' + err.message);
           stopStreaming();
+        } finally {
+          uploadInProgressRef.current = false;
         }
       }, 33);
 
@@ -141,6 +168,7 @@ function CameraCapture({ backendUrl, streamId }) {
   // Stop streaming
   const stopStreaming = () => {
     setIsStreaming(false);
+    uploadInProgressRef.current = false;
     if (streamIntervalRef.current) {
       clearInterval(streamIntervalRef.current);
     }

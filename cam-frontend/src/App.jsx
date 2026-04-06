@@ -6,7 +6,9 @@ import StreamInfo from './components/StreamInfo';
 
 function App() {
   const [activeTab, setActiveTab] = useState('capture');
-  const [streamId, setStreamId] = useState('default');
+  const [streamId, setStreamId] = useState(
+    import.meta.env.VITE_DEFAULT_STREAM_ID || 'default'
+  );
   const [backendUrl, setBackendUrl] = useState(
     import.meta.env.VITE_BACKEND_URL || 'http://localhost:6227'
   );
@@ -57,7 +59,7 @@ function App() {
             type="text"
             value={backendUrl}
             onChange={handleBackendUrlChange}
-            placeholder="http://localhost:5000"
+            placeholder="http://localhost:6227"
           />
           <label htmlFor="stream-id">Stream ID:</label>
           <input

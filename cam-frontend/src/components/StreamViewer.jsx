@@ -3,83 +3,60 @@ import './StreamViewer.css';
 
 function StreamViewer({ backendUrl, streamId }) {
   const imgRef = useRef(null);
+  const metadataIntervalRef = useRef(null);
+  const previousFrameCountRef = useRef(0);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState(null);
   const [frameCount, setFrameCount] = useState(0);
   const [latency, setLatency] = useState(0);
-  const connectionRef = useRef(null);
-  const frameCounterRef = useRef(0);
-  const lastTimeRef = useRef(Date.now());
+  const [streamUrl, setStreamUrl] = useState('');
 
   useEffect(() => {
-    const displayMJPEGStream = () => {
-      const stream = imgRef.current;
-      if (!stream) return;
+    const resolvedStreamId = streamId || 'default';
+    const resolvedStreamUrl = `${backendUrl}/live/${resolvedStreamId}?t=${Date.now()}`;
 
-      const streamUrl = `${backendUrl}/live/${streamId || 'default'}`;
-      setError(null);
+    setError(null);
+    setIsConnected(false);
+    setFrameCount(0);
+    setLatency(0);
+    previousFrameCountRef.current = 0;
+    setStreamUrl(resolvedStreamUrl);
 
-      // Create an XMLHttpRequest to handle boundary parsing
-      const xhr = new XMLHttpRequest();
-      let lastFrame = '';
-      let boundary = '';
+    const fetchStreamMetadata = async () => {
+      try {
+        const response = await fetch(`${backendUrl}/stream/${resolvedStreamId}`);
 
-      xhr.open('GET', streamUrl, true);
-      xhr.responseType = 'arraybuffer';
-      xhr.onprogress = () => {
-        try {
-          if (xhr.response) {
-            const data = new Uint8Array(xhr.response);
-            const text = String.fromCharCode.apply(null, data);
-
-            // Find JPEG frames (start with FFD8 and end with FFD9)
-            const jpegStart = text.lastIndexOf('\xFF\xD8');
-            const jpegEnd = text.lastIndexOf('\xFF\xD9');
-
-            if (jpegStart !== -1 && jpegEnd !== -1 && jpegEnd > jpegStart) {
-              const jpegData = text.substring(jpegStart, jpegEnd + 2);
-              const blob = new Blob([new Uint8Array(jpegData.split('').map(c => c.charCodeAt(0)))], {
-                type: 'image/jpeg'
-              });
-
-              const url = URL.createObjectURL(blob);
-              stream.src = url;
-
-              frameCounterRef.current++;
-              const now = Date.now();
-              if (now - lastTimeRef.current >= 1000) {
-                setFrameCount(frameCounterRef.current);
-                setLatency(Math.round((now - lastTimeRef.current) / frameCounterRef.current));
-                frameCounterRef.current = 0;
-                lastTimeRef.current = now;
-              }
-            }
-          }
-        } catch (err) {
-          console.error('Error processing stream:', err);
+        if (!response.ok) {
+          // No active producer yet, keep waiting quietly while viewer stays mounted.
+          setFrameCount(0);
+          setLatency(0);
+          return;
         }
-      };
 
-      xhr.onerror = () => {
-        setError('Failed to connect to stream. Ensure backend is running.');
+        const data = await response.json();
+        const framesNow = data.totalFrames ?? data.frameCount ?? 0;
+        const fps = Math.max(framesNow - previousFrameCountRef.current, 0);
+
+        previousFrameCountRef.current = framesNow;
+        setFrameCount(fps);
+
+        if (data.lastFrame) {
+          setLatency(Math.max(Date.now() - data.lastFrame, 0));
+        } else {
+          setLatency(0);
+        }
+      } catch (err) {
+        setError('Failed to fetch stream metadata. Ensure backend is running.');
         setIsConnected(false);
-      };
-
-      xhr.onload = () => {
-        setError('Stream ended');
-        setIsConnected(false);
-      };
-
-      xhr.send();
-      setIsConnected(true);
-      connectionRef.current = xhr;
+      }
     };
 
-    displayMJPEGStream();
+    fetchStreamMetadata();
+    metadataIntervalRef.current = setInterval(fetchStreamMetadata, 1000);
 
     return () => {
-      if (connectionRef.current) {
-        connectionRef.current.abort();
+      if (metadataIntervalRef.current) {
+        clearInterval(metadataIntervalRef.current);
       }
     };
   }, [backendUrl, streamId]);
@@ -96,7 +73,15 @@ function StreamViewer({ backendUrl, streamId }) {
             ref={imgRef}
             alt="Live Stream"
             className="stream-image"
-            onError={() => setError('Unable to load stream')}
+            src={streamUrl}
+            onLoad={() => {
+              setIsConnected(true);
+              setError(null);
+            }}
+            onError={() => {
+              setIsConnected(false);
+              setError('Unable to load stream. Start capture and streaming first.');
+            }}
           />
           {isConnected && <span className="live-badge">🔴 LIVE</span>}
         </div>
