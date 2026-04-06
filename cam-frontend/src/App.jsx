@@ -8,7 +8,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('capture');
   const [streamId, setStreamId] = useState('default');
   const [backendUrl, setBackendUrl] = useState(
-    process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000'
+    import.meta.env.VITE_BACKEND_URL || 'http://localhost:6227'
   );
   const [backendStatus, setBackendStatus] = useState('checking');
 
