@@ -8,6 +8,30 @@
   margin-bottom: 1.5rem;
 }
 
+.stream-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+}
+
+.stream-selector label {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.stream-selector select {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  min-width: 180px;
+  background: white;
+}
+
 .error-message {
   background: #fee2e2;
   border: 2px solid #ef4444;
@@ -268,6 +292,15 @@
 }
 
 @media (max-width: 768px) {
+  .stream-selector {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .stream-selector select {
+    width: 100%;
+  }
+
   .card-header {
     flex-direction: column;
     gap: 1rem;

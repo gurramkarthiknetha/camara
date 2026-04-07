@@ -1,33 +1,169 @@
 import React, { useRef, useState, useEffect } from 'react';
 import './CameraCapture.css';
 
-function CameraCapture({ backendUrl, streamId }) {
+const DEFAULT_STATS = {
+  framesSent: 0,
+  lastFps: 0,
+  bitrate: '0 Kbps',
+};
+
+const normalizeStreamId = (value) => {
+  const safeValue = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return safeValue || 'default';
+};
+
+const createCameraId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `camera-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+function CameraCapture({
+  backendUrl,
+  cameras,
+  selectedCameraId,
+  onSelectCamera,
+  onCamerasChange,
+}) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [deviceId, setDeviceId] = useState(null);
   const [devices, setDevices] = useState([]);
   const [error, setError] = useState(null);
-  const [stats, setStats] = useState({
-    framesSent: 0,
-    lastFps: 0,
-    bitrate: '0 Kbps'
-  });
+  const [stats, setStats] = useState(DEFAULT_STATS);
+  const [sourceSelectionByCamera, setSourceSelectionByCamera] = useState({});
   const streamIntervalRef = useRef(null);
   const statsIntervalRef = useRef(null);
   const uploadInProgressRef = useRef(false);
+  const isMobileDevice = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  const normalizedBackendUrl = String(backendUrl || '').replace(/\/+$/, '');
+
+  const currentCamera = cameras.find((camera) => camera.id === selectedCameraId) || cameras[0] || null;
+
+  const ensureUniqueStreamId = (candidate, currentId) => {
+    const base = normalizeStreamId(candidate);
+    const takenIds = new Set(
+      cameras
+        .filter((camera) => camera.id !== currentId)
+        .map((camera) => normalizeStreamId(camera.streamId))
+    );
+
+    let nextId = base;
+    let suffix = 2;
+    while (takenIds.has(nextId)) {
+      nextId = `${base}-${suffix}`;
+      suffix += 1;
+    }
+
+    return nextId;
+  };
+
+  const updateCamera = (cameraId, patch) => {
+    onCamerasChange(
+      cameras.map((camera) =>
+        camera.id === cameraId
+          ? {
+              ...camera,
+              ...patch,
+            }
+          : camera
+      )
+    );
+  };
+
+  const stopStreaming = () => {
+    setIsStreaming(false);
+    uploadInProgressRef.current = false;
+
+    if (streamIntervalRef.current) {
+      clearInterval(streamIntervalRef.current);
+      streamIntervalRef.current = null;
+    }
+
+    if (statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current);
+      statsIntervalRef.current = null;
+    }
+  };
+
+  const stopVideoTracks = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  const stopCamera = () => {
+    stopStreaming();
+    stopVideoTracks();
+    setIsCameraActive(false);
+  };
+
+  const getActiveSourceSelection = () => {
+    if (!currentCamera) {
+      return 'auto';
+    }
+
+    return sourceSelectionByCamera[currentCamera.id] || 'auto';
+  };
+
+  const getVideoConstraintsForSelection = (selection) => {
+    const baseConstraints = {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+    };
+
+    if (selection.startsWith('device:')) {
+      return {
+        ...baseConstraints,
+        deviceId: { exact: selection.replace('device:', '') },
+      };
+    }
+
+    if (selection === 'facing:user') {
+      return {
+        ...baseConstraints,
+        facingMode: { ideal: 'user' },
+      };
+    }
+
+    if (selection === 'facing:environment') {
+      return {
+        ...baseConstraints,
+        facingMode: { ideal: 'environment' },
+      };
+    }
+
+    // Default source selection prefers back camera on mobile.
+    if (isMobileDevice) {
+      return {
+        ...baseConstraints,
+        facingMode: { ideal: 'environment' },
+      };
+    }
+
+    return baseConstraints;
+  };
 
   // Enumerate available cameras
   useEffect(() => {
     const enumerateDevices = async () => {
       try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(device => device.kind === 'videoinput');
-        setDevices(videoDevices);
-        if (videoDevices.length > 0) {
-          setDeviceId(videoDevices[0].deviceId);
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+          throw new Error('MediaDevices API is not available in this browser.');
         }
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter((device) => device.kind === 'videoinput');
+        setDevices(videoDevices);
       } catch (err) {
         setError('Failed to enumerate devices: ' + err.message);
       }
@@ -36,39 +172,102 @@ function CameraCapture({ backendUrl, streamId }) {
     enumerateDevices();
   }, []);
 
+  useEffect(() => {
+    const validCameraIds = new Set(cameras.map((camera) => camera.id));
+
+    setSourceSelectionByCamera((previous) => {
+      const next = {};
+      Object.entries(previous).forEach(([cameraId, value]) => {
+        if (validCameraIds.has(cameraId)) {
+          next[cameraId] = value;
+        }
+      });
+      return next;
+    });
+  }, [cameras]);
+
+  useEffect(() => {
+    if (!selectedCameraId) {
+      return;
+    }
+
+    setIsStreaming(false);
+    uploadInProgressRef.current = false;
+
+    if (streamIntervalRef.current) {
+      clearInterval(streamIntervalRef.current);
+      streamIntervalRef.current = null;
+    }
+
+    if (statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current);
+      statsIntervalRef.current = null;
+    }
+
+    if (videoRef.current && videoRef.current.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
+    }
+
+    setIsCameraActive(false);
+    setStats(DEFAULT_STATS);
+    setError(null);
+  }, [selectedCameraId]);
+
   // Request camera access
   const startCamera = async () => {
+    if (!currentCamera) {
+      setError('No camera profile selected. Add or select a camera first.');
+      return;
+    }
+
     try {
       setError(null);
+      stopCamera();
+
+      const selection = getActiveSourceSelection();
       const constraints = {
-        video: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
+        video: getVideoConstraintsForSelection(selection),
+        audio: false,
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (primaryError) {
+        if (selection.startsWith('device:')) {
+          // Device IDs can become stale. Fallback to automatic selection.
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: getVideoConstraintsForSelection('auto'),
+            audio: false,
+          });
+        } else {
+          throw primaryError;
+        }
+      }
+
       videoRef.current.srcObject = stream;
+      await videoRef.current.play().catch(() => {
+        // Some browsers block explicit play calls, but stream still attaches.
+      });
+
       setIsCameraActive(true);
+
+      const allDevices = await navigator.mediaDevices.enumerateDevices();
+      setDevices(allDevices.filter((device) => device.kind === 'videoinput'));
     } catch (err) {
       setError('Camera access denied or not available: ' + err.message);
       console.error('Camera error:', err);
     }
   };
 
-  // Stop camera
-  const stopCamera = () => {
-    stopStreaming();
-    if (videoRef.current && videoRef.current.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach(track => track.stop());
-      setIsCameraActive(false);
-    }
-  };
-
   // Start streaming frames to backend
   const startStreaming = async () => {
+    if (!currentCamera) {
+      setError('No camera profile selected. Add or select a camera first.');
+      return;
+    }
+
     if (!isCameraActive) {
       setError('Camera is not active. Please start camera first.');
       return;
@@ -77,11 +276,16 @@ function CameraCapture({ backendUrl, streamId }) {
     try {
       setError(null);
       setIsStreaming(true);
-      setStats({ framesSent: 0, lastFps: 0, bitrate: '0 Kbps' });
+      setStats(DEFAULT_STATS);
 
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
       const video = videoRef.current;
+      const resolvedStreamId = ensureUniqueStreamId(currentCamera.streamId, currentCamera.id);
+
+      if (resolvedStreamId !== currentCamera.streamId) {
+        updateCamera(currentCamera.id, { streamId: resolvedStreamId });
+      }
 
       if (!video || !canvas || !ctx) {
         throw new Error('Camera elements are not ready yet');
@@ -124,10 +328,10 @@ function CameraCapture({ backendUrl, streamId }) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              streamId: streamId || 'default',
+              streamId: resolvedStreamId,
               frameData: frameData,
-              timestamp: Date.now()
-            })
+              timestamp: Date.now(),
+            }),
           });
 
           if (!response.ok) {
@@ -149,11 +353,15 @@ function CameraCapture({ backendUrl, streamId }) {
         const now = Date.now();
         const elapsed = (now - lastTime) / 1000;
         const fps = Math.round(frameCount / elapsed);
+        const estimatedKbps =
+          fps > 0 && canvas.width > 0 && canvas.height > 0
+            ? ((fps * canvas.width * canvas.height * 0.8 * 8) / 1000).toFixed(0)
+            : '0';
 
-        setStats(prev => ({
+        setStats((prev) => ({
           framesSent: prev.framesSent + frameCount,
           lastFps: fps,
-          bitrate: ((fps * canvas.width * canvas.height * 0.8 * 8) / 1000).toFixed(0) + ' Kbps'
+          bitrate: `${estimatedKbps} Kbps`,
         }));
 
         frameCount = 0;
@@ -165,25 +373,108 @@ function CameraCapture({ backendUrl, streamId }) {
     }
   };
 
-  // Stop streaming
-  const stopStreaming = () => {
-    setIsStreaming(false);
-    uploadInProgressRef.current = false;
-    if (streamIntervalRef.current) {
-      clearInterval(streamIntervalRef.current);
+  const addCamera = () => {
+    const newCamera = {
+      id: createCameraId(),
+      name: `Camera ${cameras.length + 1}`,
+      streamId: ensureUniqueStreamId(`camera-${cameras.length + 1}`),
+    };
+
+    onCamerasChange([...cameras, newCamera]);
+    onSelectCamera(newCamera.id);
+
+    setSourceSelectionByCamera((previous) => ({
+      ...previous,
+      [newCamera.id]: 'auto',
+    }));
+  };
+
+  const removeCamera = (cameraId) => {
+    if (cameras.length <= 1) {
+      setError('At least one camera profile is required.');
+      return;
     }
-    if (statsIntervalRef.current) {
-      clearInterval(statsIntervalRef.current);
+
+    const remaining = cameras.filter((camera) => camera.id !== cameraId);
+    if (cameraId === currentCamera?.id) {
+      stopCamera();
+      setStats(DEFAULT_STATS);
+      setError(null);
+    }
+
+    onCamerasChange(remaining);
+    if (cameraId === selectedCameraId) {
+      onSelectCamera(remaining[0].id);
+    }
+
+    setSourceSelectionByCamera((previous) => {
+      const next = { ...previous };
+      delete next[cameraId];
+      return next;
+    });
+  };
+
+  const handleCameraFieldChange = (field, value) => {
+    if (!currentCamera) {
+      return;
+    }
+
+    updateCamera(currentCamera.id, {
+      [field]: value,
+    });
+  };
+
+  const handleStreamIdBlur = () => {
+    if (!currentCamera) {
+      return;
+    }
+
+    const nextStreamId = ensureUniqueStreamId(currentCamera.streamId, currentCamera.id);
+    if (nextStreamId !== currentCamera.streamId) {
+      updateCamera(currentCamera.id, { streamId: nextStreamId });
+    }
+  };
+
+  const copyLink = async (link) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      alert('Stream link copied to clipboard!');
+    } catch {
+      alert('Unable to copy link automatically.');
     }
   };
 
   // Cleanup on unmount
   useEffect(() => {
+    const videoElement = videoRef.current;
+
     return () => {
-      stopStreaming();
-      stopCamera();
+      uploadInProgressRef.current = false;
+
+      if (streamIntervalRef.current) {
+        clearInterval(streamIntervalRef.current);
+      }
+
+      if (statsIntervalRef.current) {
+        clearInterval(statsIntervalRef.current);
+      }
+
+      if (videoElement && videoElement.srcObject) {
+        videoElement.srcObject.getTracks().forEach((track) => track.stop());
+      }
     };
   }, []);
+
+  if (!currentCamera) {
+    return (
+      <div className="camera-capture">
+        <h2>📹 Camera Capture & Stream</h2>
+        <div className="error-message">No camera profiles found.</div>
+      </div>
+    );
+  }
+
+  const currentSourceSelection = getActiveSourceSelection();
 
   return (
     <div className="camera-capture">
@@ -191,21 +482,93 @@ function CameraCapture({ backendUrl, streamId }) {
 
       {error && <div className="error-message">{error}</div>}
 
+      <div className="camera-manager">
+        <div className="camera-manager-header">
+          <h3>Camera Profiles</h3>
+          <button className="btn btn-primary add-camera-btn" onClick={addCamera}>
+            + Add Camera
+          </button>
+        </div>
+
+        <div className="camera-profiles-list">
+          {cameras.map((camera) => (
+            <button
+              key={camera.id}
+              type="button"
+              className={`camera-profile-chip ${camera.id === currentCamera.id ? 'active' : ''}`}
+              onClick={() => onSelectCamera(camera.id)}
+            >
+              <span className="profile-name">{camera.name}</span>
+              <span className="profile-stream-id">{normalizeStreamId(camera.streamId)}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="camera-profile-editor">
+          <div className="editor-field">
+            <label htmlFor="camera-name">Camera Name:</label>
+            <input
+              id="camera-name"
+              type="text"
+              value={currentCamera.name}
+              onChange={(e) => handleCameraFieldChange('name', e.target.value)}
+              placeholder="Camera label"
+            />
+          </div>
+
+          <div className="editor-field">
+            <label htmlFor="camera-stream-id">Stream ID:</label>
+            <input
+              id="camera-stream-id"
+              type="text"
+              value={currentCamera.streamId}
+              onChange={(e) => handleCameraFieldChange('streamId', e.target.value)}
+              onBlur={handleStreamIdBlur}
+              placeholder="camera-1"
+            />
+          </div>
+
+          <button
+            className="btn btn-danger remove-camera-btn"
+            onClick={() => removeCamera(currentCamera.id)}
+            disabled={cameras.length <= 1}
+          >
+            Remove Camera
+          </button>
+        </div>
+      </div>
+
       <div className="capture-controls">
         <div className="camera-select">
-          <label htmlFor="camera-select">Select Camera:</label>
+          <label htmlFor="camera-select">Camera Source:</label>
           <select
             id="camera-select"
-            value={deviceId || ''}
-            onChange={(e) => setDeviceId(e.target.value)}
+            value={currentSourceSelection}
+            onChange={(e) => {
+              const selection = e.target.value;
+              setSourceSelectionByCamera((previous) => ({
+                ...previous,
+                [currentCamera.id]: selection,
+              }));
+            }}
             disabled={isCameraActive}
           >
-            {devices.map(device => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label || `Camera ${devices.indexOf(device) + 1}`}
+            <option value="auto">
+              {isMobileDevice ? 'Auto (Back camera preferred)' : 'Auto'}
+            </option>
+            {isMobileDevice && <option value="facing:environment">Back Camera</option>}
+            {isMobileDevice && <option value="facing:user">Front Camera</option>}
+            {devices.map((device, index) => (
+              <option key={device.deviceId} value={`device:${device.deviceId}`}>
+                {device.label || `Camera ${index + 1}`}
               </option>
             ))}
           </select>
+          {isMobileDevice && (
+            <small className="camera-source-hint">
+              On mobile, auto mode requests the back camera by default.
+            </small>
+          )}
         </div>
 
         <div className="button-group">
@@ -275,18 +638,52 @@ function CameraCapture({ backendUrl, streamId }) {
             <span className="label">Bitrate:</span>
             <span className="value">{stats.bitrate}</span>
           </div>
+          <div className="stat-item">
+            <span className="label">Stream ID:</span>
+            <span className="value code">{normalizeStreamId(currentCamera.streamId)}</span>
+          </div>
         </div>
       </div>
 
       <div className="info-section">
         <h3>ℹ️ How it works</h3>
         <ol>
-          <li>Select a camera device from the dropdown</li>
-          <li>Click "Start Camera" to request camera access</li>
-          <li>Click "Start Streaming" to begin sending frames to backend</li>
-          <li>View the stream in the "View Stream" tab at: <code>{backendUrl}/live/{streamId || 'default'}</code></li>
-          <li>The stream is accessible via MJPEG format - can be embedded anywhere</li>
+          <li>Add one or more camera profiles and assign each profile a stream ID</li>
+          <li>Select a profile and choose source as auto, front/back (mobile), or a specific camera</li>
+          <li>Click "Start Camera" and then "Start Streaming" for the selected profile</li>
+          <li>Open "View Stream" to monitor all configured feeds together</li>
+          <li>
+            Current profile URL: <code>{backendUrl}/live/{normalizeStreamId(currentCamera.streamId)}</code>
+          </li>
         </ol>
+      </div>
+
+      <div className="capture-links">
+        <h3>🔗 Published Camera Links</h3>
+        <div className="capture-links-list">
+          {cameras.map((camera) => {
+            const streamId = normalizeStreamId(camera.streamId);
+            const streamUrl = `${normalizedBackendUrl}/live/${streamId}`;
+
+            return (
+              <div key={camera.id} className="capture-link-item">
+                <div className="capture-link-meta">
+                  <strong>{camera.name}</strong>
+                  <span>
+                    Streaming ID: <code>{streamId}</code>
+                  </span>
+                </div>
+
+                <div className="capture-link-actions">
+                  <code>{streamUrl}</code>
+                  <button className="btn btn-primary capture-link-copy" onClick={() => copyLink(streamUrl)}>
+                    Copy
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

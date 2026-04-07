@@ -1,19 +1,62 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import './StreamInfo.css';
 
-function StreamInfo({ backendUrl, streamId }) {
+const normalizeStreamId = (value) => {
+  const safeValue = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return safeValue || 'default';
+};
+
+function StreamInfo({ backendUrl, streamId, cameras = [] }) {
   const [streamData, setStreamData] = useState(null);
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const fetchStreamInfo = async () => {
+  const configuredStreamIds = useMemo(() => {
+    const seen = new Set();
+    const streamIds = [];
+
+    cameras.forEach((camera) => {
+      const normalized = normalizeStreamId(camera.streamId);
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        streamIds.push(normalized);
+      }
+    });
+
+    if (streamIds.length === 0) {
+      streamIds.push(normalizeStreamId(streamId));
+    }
+
+    return streamIds;
+  }, [cameras, streamId]);
+
+  const [selectedStreamId, setSelectedStreamId] = useState(normalizeStreamId(streamId));
+
+  useEffect(() => {
+    const preferredStreamId = normalizeStreamId(streamId);
+    if (configuredStreamIds.includes(preferredStreamId)) {
+      setSelectedStreamId(preferredStreamId);
+      return;
+    }
+
+    if (!configuredStreamIds.includes(selectedStreamId)) {
+      setSelectedStreamId(configuredStreamIds[0]);
+    }
+  }, [streamId, configuredStreamIds, selectedStreamId]);
+
+  const fetchStreamInfo = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
       // Fetch stream info
-      const response = await fetch(`${backendUrl}/stream/${streamId || 'default'}`);
+      const response = await fetch(`${backendUrl}/stream/${selectedStreamId}`);
       if (!response.ok) throw new Error('Stream not found');
 
       const data = await response.json();
@@ -24,9 +67,9 @@ function StreamInfo({ backendUrl, streamId }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [backendUrl, selectedStreamId]);
 
-  const fetchAllStreams = async () => {
+  const fetchAllStreams = useCallback(async () => {
     try {
       const response = await fetch(`${backendUrl}/streams`);
       if (!response.ok) throw new Error('Failed to fetch streams');
@@ -36,7 +79,7 @@ function StreamInfo({ backendUrl, streamId }) {
     } catch (err) {
       console.error('Error fetching streams:', err);
     }
-  };
+  }, [backendUrl]);
 
   useEffect(() => {
     fetchStreamInfo();
@@ -48,11 +91,11 @@ function StreamInfo({ backendUrl, streamId }) {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [backendUrl, streamId]);
+  }, [fetchAllStreams, fetchStreamInfo]);
 
   const stopStream = async () => {
     try {
-      const response = await fetch(`${backendUrl}/stream/${streamId || 'default'}`, {
+      const response = await fetch(`${backendUrl}/stream/${selectedStreamId}`, {
         method: 'DELETE'
       });
 
@@ -69,6 +112,21 @@ function StreamInfo({ backendUrl, streamId }) {
   return (
     <div className="stream-info">
       <h2>ℹ️ Stream Information</h2>
+
+      <div className="stream-selector">
+        <label htmlFor="stream-selector">Inspect stream:</label>
+        <select
+          id="stream-selector"
+          value={selectedStreamId}
+          onChange={(e) => setSelectedStreamId(e.target.value)}
+        >
+          {configuredStreamIds.map((configuredStreamId) => (
+            <option key={configuredStreamId} value={configuredStreamId}>
+              {configuredStreamId}
+            </option>
+          ))}
+        </select>
+      </div>
 
       {error && <div className="error-message">{error}</div>}
 

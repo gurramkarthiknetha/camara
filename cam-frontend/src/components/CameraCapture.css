@@ -8,6 +8,107 @@
   margin-bottom: 1.5rem;
 }
 
+.camera-manager {
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.camera-manager-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.camera-manager-header h3 {
+  margin: 0;
+  color: #1f2937;
+}
+
+.add-camera-btn {
+  min-width: 130px;
+}
+
+.camera-profiles-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.camera-profile-chip {
+  border: 2px solid #cbd5e1;
+  background: white;
+  border-radius: 999px;
+  padding: 0.45rem 0.85rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  transition: all 0.2s ease;
+}
+
+.camera-profile-chip:hover {
+  border-color: #667eea;
+}
+
+.camera-profile-chip.active {
+  border-color: #667eea;
+  background: #eef2ff;
+}
+
+.profile-name {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.profile-stream-id {
+  font-family: monospace;
+  font-size: 0.82rem;
+  color: #667eea;
+  background: #f8fafc;
+  border-radius: 999px;
+  padding: 0.15rem 0.45rem;
+}
+
+.camera-profile-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.editor-field label {
+  font-weight: 600;
+  color: #374151;
+}
+
+.editor-field input {
+  padding: 0.65rem 0.75rem;
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.editor-field input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.remove-camera-btn {
+  min-width: 145px;
+}
+
 .capture-controls {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -44,6 +145,11 @@
 .camera-select select:focus {
   outline: none;
   border-color: #667eea;
+}
+
+.camera-source-hint {
+  color: #6b7280;
+  font-size: 0.8rem;
 }
 
 .button-group {
@@ -176,6 +282,15 @@
   color: #10b981;
 }
 
+.stat-item .value.code {
+  font-family: monospace;
+  font-size: 0.9rem;
+  background: #eef2ff;
+  color: #4f46e5;
+  border-radius: 6px;
+  padding: 0.2rem 0.45rem;
+}
+
 .error-message {
   background: #fee2e2;
   border: 2px solid #ef4444;
@@ -216,7 +331,88 @@
   color: #667eea;
 }
 
+.capture-links {
+  background: #eff6ff;
+  border: 2px solid #93c5fd;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.capture-links h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  color: #1d4ed8;
+}
+
+.capture-links-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.capture-link-item {
+  background: white;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.capture-link-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+  color: #1f2937;
+}
+
+.capture-link-meta code {
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+
+.capture-link-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.capture-link-actions code {
+  flex: 1;
+  min-width: 230px;
+  background: #f8fafc;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  color: #1d4ed8;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.capture-link-copy {
+  min-width: 82px;
+  flex: 0 0 auto;
+}
+
 @media (max-width: 1024px) {
+  .camera-profile-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .remove-camera-btn,
+  .add-camera-btn {
+    width: 100%;
+  }
+
+  .camera-manager-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .capture-controls {
     grid-template-columns: 1fr;
   }
@@ -233,6 +429,17 @@
 @media (max-width: 768px) {
   .capture-controls {
     grid-template-columns: 1fr;
+  }
+
+  .capture-link-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .capture-link-actions code,
+  .capture-link-copy {
+    width: 100%;
+    min-width: 0;
   }
 
   .button-group {
